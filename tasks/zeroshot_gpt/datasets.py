@@ -17,6 +17,7 @@
 
 import json
 import math
+import multiprocessing
 
 import numpy as np
 import torch
@@ -24,6 +25,7 @@ import torch
 from megatron import get_args
 from megatron import print_rank_0
 from megatron import get_tokenizer
+from megatron.tokenizer import build_tokenizer
 from .detokenizer import get_detokenizer
 
 
@@ -34,6 +36,8 @@ def build_dataset(task):
         return _build_lambada_dataset()
     if task == 'WIKITEXT103':
         return _build_wikitext103_dataset()
+    if task == 'EVAL_LM':
+        return _build_lm_eval_dataset()
 
     raise NotImplementedError('dataset for {} task is not '
                               'implemented.'.format(task))
@@ -155,6 +159,55 @@ def _build_wikitext103_dataset():
     val_dataset = _LMDataset(tokenized_data, args.seq_length, tokenizer.eod,
                              num_original_tokens, num_tokenized_tokens,
                              args.overlapping_eval)
+    print_rank_0(' > number of original tokens: {}, number of detokenized '
+                 'tokens: {}'.format(num_original_tokens, num_tokenized_tokens))
+
+    return val_dataset
+
+
+class Encoder(object):
+    def __init__(self, args):
+        self.args = args
+
+    def initializer(self):
+        # Use Encoder class as a container for global data
+        Encoder.tokenizer = build_tokenizer(self.args)
+
+    def encode(self, text):
+        sentence_ids = Encoder.tokenizer.tokenize(text)
+        # if len(sentence_ids) > 0 and self.args.append_eod:
+        #     sentence_ids.append(Encoder.tokenizer.eod)
+        return sentence_ids, len(text)
+
+def _build_lm_eval_dataset():
+    """"""
+    args = get_args()
+    tokenizer = get_tokenizer()
+
+    assert len(args.valid_data) == 1
+    with open(args.valid_data[0], "rb") as reader:
+        entire_data = reader.readlines()
+    
+    data = [line.decode('utf-8').strip() for line in entire_data]
+    data = [line for line in data if len(line) > 0]
+
+    num_original_tokens = len("\n".join(data).split())
+
+    encoder = Encoder(args)
+    print_rank_0('Tokenizing data...')
+    pool = multiprocessing.Pool(args.workers, initializer=encoder.initializer)
+    encoded_docs = pool.imap(encoder.encode, data, 25)
+
+    tokenized_data = []
+    num_tokenized_tokens = 0
+    for (sentence_ids, _) in encoded_docs:
+        tokenized_data += sentence_ids
+        num_tokenized_tokens += len(sentence_ids)
+
+    val_dataset = _LMDataset(tokenized_data, args.seq_length, tokenizer.eod,
+                             num_original_tokens, num_tokenized_tokens,
+                             args.overlapping_eval)
+
     print_rank_0(' > number of original tokens: {}, number of detokenized '
                  'tokens: {}'.format(num_original_tokens, num_tokenized_tokens))
 

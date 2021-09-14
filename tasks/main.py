@@ -62,6 +62,9 @@ def get_tasks_args(parser):
     group.add_argument('--faiss-topk-retrievals', type=int, default=100,
                        help='Number of blocks to use as top-k during retrieval')
 
+    group.add_argument('--workers', type=int, default=2,
+                       help='Number of workers to tokenize dataset.')
+
     return parser
 
 
@@ -79,7 +82,7 @@ if __name__ == '__main__':
         from race.finetune import main
     elif args.task in ['MNLI', 'QQP']:
         from glue.finetune import main
-    elif args.task in ['LAMBADA', 'WIKITEXT103']:
+    elif args.task in ['LAMBADA', 'WIKITEXT103', 'EVAL_LM']:
         from zeroshot_gpt.evaluate import main
     elif args.task in ['ICT-ZEROSHOT-NQ']:
         from orqa.evaluate_orqa import main

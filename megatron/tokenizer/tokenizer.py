@@ -21,6 +21,7 @@ from abc import abstractmethod
 from .bert_tokenization import FullTokenizer as FullBertTokenizer
 from .gpt2_tokenization import GPT2Tokenizer
 from transformers import AutoTokenizer
+import tokenizers
 
 def build_tokenizer(args):
     """Initialize tokenizer."""
@@ -29,7 +30,10 @@ def build_tokenizer(args):
               flush=True)
 
     # Select and instantiate the tokenizer.
-    assert args.vocab_file is not None or args.tokenizer_type == "PretrainedFromHF"
+    assert args.vocab_file is not None or args.tokenizer_type in [
+        "PretrainedFromHF", 
+        "PretrainedFromHFTokenizers"
+    ]
     if args.tokenizer_type == 'BertWordPieceLowerCase':
         tokenizer = _BertWordPieceTokenizer(vocab_file=args.vocab_file,
                                             lower_case=True,
@@ -48,6 +52,13 @@ def build_tokenizer(args):
             flush=True,
         )
         tokenizer = _AutoTokenizer(args.tokenizer_name_or_path)
+    elif args.tokenizer_type == "PretrainedFromHFTokenizers":
+        assert args.tokenizer_name_or_path is not None
+        print(
+            " vocab file is un-used. loading tokenizer from pre-trained model",
+            flush=True,
+        )
+        tokenizer = _AutoTokenizerFromTokenizers(args.tokenizer_name_or_path)
     else:
         raise NotImplementedError('{} tokenizer is not '
                                   'implemented.'.format(args.tokenizer_type))
@@ -329,3 +340,38 @@ class _AutoTokenizer(AbstractTokenizer):
     @property
     def eod(self):
         return self.tokenizer.eos_token_id
+
+
+class _AutoTokenizerFromTokenizers(AbstractTokenizer):
+    """AutoTokenizer for Hf Tokenizers Pretrained model loading."""
+
+    def __init__(self, model_file):
+        model_file = model_file
+        name = ".".join(model_file.split('.')[:-1])
+        super().__init__(name)
+        self.tokenizer = tokenizers.Tokenizer.from_file(model_file)
+        self.encoder = self.tokenizer.get_vocab()
+        self.decoder = {v: k for k, v in self.encoder.items()}
+        self.eod_id = self.encoder['</s>']
+
+    @property
+    def vocab_size(self):
+        return self.tokenizer.get_vocab_size()
+
+    @property
+    def vocab(self):
+        return self.encoder
+
+    @property
+    def inv_vocab(self):
+        return self.decoder
+
+    def tokenize(self, text):
+        return self.tokenizer.encode(text).ids
+
+    def detokenize(self, token_ids):
+        return self.tokenizer.decode(token_ids)
+
+    @property
+    def eod(self):
+        return self.eod_id

@@ -34,6 +34,7 @@ from .global_vars import get_tensorboard_writer
 from .global_vars import get_adlr_autoresume
 from .global_vars import get_timers
 from .initialize  import initialize_megatron
+from . import model
 
 def print_rank_0(message):
     """If distributed is initialized, print only on rank 0."""

@@ -198,7 +198,7 @@ def main():
 
     if args.task == 'LAMBADA':
         eval_metric = 'accuracy'
-    elif args.task == 'WIKITEXT103':
+    elif args.task in ['WIKITEXT103', 'EVAL_LM']:
         eval_metric = 'loss'
     else:
         raise NotImplementedError('{} task is not implemented.'.format(
