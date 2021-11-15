@@ -215,7 +215,7 @@ def main():
     # Data stuff.
     dataset = build_dataset(args.task)
     dataloader = build_data_loader(dataset, args.micro_batch_size,
-                                   args.num_workers, drop_last=False)
+                                   args.num_workers, drop_last=True)
 
     # Run evaluation.
     evaluate_and_print_results(args.task, dataloader, model, eval_metric)

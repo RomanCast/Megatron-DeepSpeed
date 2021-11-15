@@ -110,9 +110,14 @@ def build_tokens_types_paddings_from_ids(text_a_ids, text_b_ids, max_seq_length,
 
     # Padding.
     padding_length = max_seq_length - len(ids)
+    if text_b_ids is not None:
+        types_pad_id = 2
+    else:
+        types_pad_id = 1
+
     if padding_length > 0:
         ids.extend([pad_id] * padding_length)
-        types.extend([pad_id] * padding_length)
+        types.extend([types_pad_id] * padding_length)
         paddings.extend([0] * padding_length)
 
     return ids, types, paddings

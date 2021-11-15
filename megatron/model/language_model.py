@@ -152,8 +152,13 @@ class Embedding(MegatronModule):
         # token types and add them as needed.
         self._tokentype_embeddings_key = 'tokentype_embeddings'
         if self.num_tokentypes > 0:
-            self.tokentype_embeddings = torch.nn.Embedding(self.num_tokentypes,
-                                                           self.hidden_size)
+            # Changed so that we add a token type corresponding to num_tokentypes + 1
+            # self.tokentype_embeddings = torch.nn.Embedding(self.num_tokentypes,
+            #                                                self.hidden_size)
+            self.tokentype_embeddings = torch.nn.Embedding(
+                self.num_tokentypes+1,
+                self.hidden_size,
+                padding_idx=self.num_tokentypes)
             # Initialize the token-type embeddings.
             self.init_method(self.tokentype_embeddings.weight)
         else:
@@ -494,10 +499,16 @@ class TransformerLanguageModel(MegatronModule):
         if self.post_process:
             # pooler
             if self.add_pooler:
-                assert 'pooler' in state_dict, \
-                    'could not find data for pooler in the checkpoint'
-                self.pooler.load_state_dict(state_dict[self._pooler_key],
+                # # We do not enforce a pretrained pooler as we do not have any when using RoBERTa
+                # assert 'pooler' in state_dict, \
+                #     'could not find data for pooler in the checkpoint'
+                # self.pooler.load_state_dict(state_dict[self._pooler_key],
+                #                             strict=strict)
+                if 'pooler' in state_dict:
+                    self.pooler.load_state_dict(state_dict[self._pooler_key],
                                             strict=strict)
+                else:
+                    print("No pooler was found in the state dict, keeping the randomly initialized one.")
         # decoder
         if self.add_decoder:
             assert 'decoder' in state_dict, \

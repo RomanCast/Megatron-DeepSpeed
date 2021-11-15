@@ -47,6 +47,8 @@ def get_tasks_args(parser):
                        help='Sliding window for overlapping evaluation.')
     group.add_argument('--strict-lambada', action='store_true',
                        help='Use more difficult formulation of lambada.')
+    group.add_argument('--ppl-per-char', action='store_true',
+                       help='Reweight perplexity per characters instead of per word.')
     # Retriever args
     group.add_argument('--qa-data-dev', type=str, default=None,
                        help='Path to the QA dataset dev file.')

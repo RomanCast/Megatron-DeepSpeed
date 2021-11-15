@@ -32,7 +32,8 @@ def build_tokenizer(args):
     # Select and instantiate the tokenizer.
     assert args.vocab_file is not None or args.tokenizer_type in [
         "PretrainedFromHF", 
-        "PretrainedFromHFTokenizers"
+        "PretrainedFromHFTokenizers",
+        "BertPretrainedFromHFTokenizers"
     ]
     if args.tokenizer_type == 'BertWordPieceLowerCase':
         tokenizer = _BertWordPieceTokenizer(vocab_file=args.vocab_file,
@@ -59,6 +60,13 @@ def build_tokenizer(args):
             flush=True,
         )
         tokenizer = _AutoTokenizerFromTokenizers(args.tokenizer_name_or_path)
+    elif args.tokenizer_type == "BertPretrainedFromHFTokenizers":
+        assert args.tokenizer_name_or_path is not None
+        print(
+            " vocab file is un-used. loading tokenizer from pre-trained model",
+            flush=True,
+        )
+        tokenizer = _BertAutoTokenizerFromTokenizers(args.tokenizer_name_or_path)
     else:
         raise NotImplementedError('{} tokenizer is not '
                                   'implemented.'.format(args.tokenizer_type))
@@ -375,3 +383,56 @@ class _AutoTokenizerFromTokenizers(AbstractTokenizer):
     @property
     def eod(self):
         return self.eod_id
+
+
+class _BertAutoTokenizerFromTokenizers(AbstractTokenizer):
+
+    def __init__(self, model_file):
+        model_file = model_file
+        name = ".".join(model_file.split('.')[:-1])
+        super().__init__(name)
+        self.tokenizer = tokenizers.Tokenizer.from_file(model_file)
+        # These tokens are not originally included in the BPE tokenizer, we add them manually.
+        self.tokenizer.add_special_tokens(
+            ['[CLS]', '[SEP]', '[PAD]', '[MASK]']
+        )
+        self.encoder = self.tokenizer.get_vocab()
+        self.decoder = {v: k for k, v in self.encoder.items()}
+        self.cls_id = self.encoder['[CLS]']
+        self.sep_id = self.encoder['[SEP]']
+        self.pad_id = self.encoder['[PAD]']
+        self.mask_id = self.encoder['[MASK]']
+
+    @property
+    def vocab_size(self):
+        return self.tokenizer.get_vocab_size()
+
+    @property
+    def vocab(self):
+        return self.encoder
+
+    @property
+    def inv_vocab(self):
+        return self.decoder
+
+    def tokenize(self, text):
+        return self.tokenizer.encode(text).ids
+
+    def decode(self, ids):
+        return self.tokenizer.decode(ids)
+
+    @property
+    def cls(self):
+        return self.cls_id
+
+    @property
+    def sep(self):
+        return self.sep_id
+
+    @property
+    def pad(self):
+        return self.pad_id
+
+    @property
+    def mask(self):
+        return self.mask_id

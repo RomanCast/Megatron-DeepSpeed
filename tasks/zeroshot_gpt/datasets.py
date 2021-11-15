@@ -191,7 +191,10 @@ def _build_lm_eval_dataset():
     data = [line.decode('utf-8').strip() for line in entire_data]
     data = [line for line in data if len(line) > 0]
 
-    num_original_tokens = len("\n".join(data).split())
+    if args.ppl_per_char:
+        num_original_tokens = sum([len(d) for d in data])
+    else:
+        num_original_tokens = len("\n".join(data).split())
 
     encoder = Encoder(args)
     print_rank_0('Tokenizing data...')
@@ -208,7 +211,11 @@ def _build_lm_eval_dataset():
                              num_original_tokens, num_tokenized_tokens,
                              args.overlapping_eval)
 
-    print_rank_0(' > number of original tokens: {}, number of detokenized '
-                 'tokens: {}'.format(num_original_tokens, num_tokenized_tokens))
+    if args.ppl_per_char:
+        print_rank_0(' > number of characters: {}, number of detokenized '
+            'tokens: {}'.format(num_original_tokens, num_tokenized_tokens))
+    else:
+        print_rank_0(' > number of original tokens: {}, number of detokenized '
+            'tokens: {}'.format(num_original_tokens, num_tokenized_tokens))
 
     return val_dataset
