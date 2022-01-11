@@ -25,6 +25,7 @@ from megatron import print_rank_0
 from megatron import get_timers
 from megatron import mpu
 from megatron.data.dataset_utils import build_train_valid_test_datasets
+from megatron.data.bert_dataset import build_dataset_group
 from megatron.model import BertModel
 from megatron.training import pretrain
 from megatron.utils import average_losses_across_data_parallel_group
@@ -125,19 +126,52 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
 
     print_rank_0('> building train, validation, and test datasets '
                  'for BERT ...')
-    train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
-        data_prefix=args.data_path,
-        data_impl=args.data_impl,
-        splits_string=args.split,
-        train_valid_test_num_samples=train_val_test_num_samples,
-        max_seq_length=args.seq_length,
-        masked_lm_prob=args.mask_prob,
-        short_seq_prob=args.short_seq_prob,
-        seed=args.seed,
-        skip_warmup=(not args.mmap_warmup),
-        binary_head=args.bert_binary_head)
-    print_rank_0("> finished creating BERT datasets ...")
+    if args.data_path:
+        train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
+            data_prefix=args.data_path,
+            data_impl=args.data_impl,
+            splits_string=args.split,
+            train_valid_test_num_samples=train_val_test_num_samples,
+            max_seq_length=args.seq_length,
+            masked_lm_prob=args.mask_prob,
+            short_seq_prob=args.short_seq_prob,
+            seed=args.seed,
+            skip_warmup=(not args.mmap_warmup),
+            binary_head=args.bert_binary_head)
+    elif args.train_weighted_split_paths:
+        assigned_train_valid_test = []
+        if args.train_weighted_split_paths is not None:
+            train_ds = []
+            assigned_train_valid_test.append("train")
+        if args.valid_weighted_split_paths is not None:
+            valid_ds = []
+            assigned_train_valid_test.append("valid")
+        if args.test_weighted_split_paths is not None:
+            test_ds = []
+            assigned_train_valid_test.append("test")
 
+        for s in assigned_train_valid_test:
+            data_groups = zip(eval(f"args.{s}_weighted_split_paths"),
+                                eval(f"args.{s}_weighted_split_weights"),
+                                eval(f"args.{s}_weighted_split_splits"),
+                                eval(f"args.{s}_weighted_split_names"))
+            for paths, weights, splits, name in data_groups:
+                d = build_dataset_group(dataset_group_name=name, 
+                    paths=paths, 
+                    weights=weights, 
+                    splits=splits,
+                    data_impl=args.data_impl,
+                    train_valid_test_num_samples=train_val_test_num_samples,
+                    max_seq_length=args.seq_length, 
+                    masked_lm_prob=args.mask_prob,
+                    short_seq_prob=args.short_seq_prob,
+                    binary_head=args.bert_binary_head,
+                    seed=args.seed,
+                    skip_warmup=(not args.mmap_warmup),
+                    train_valid_test=s)
+                eval(f"{s}_ds").append(d)
+
+    print_rank_0("> finished creating BERT datasets ...")
     return train_ds, valid_ds, test_ds
 
 

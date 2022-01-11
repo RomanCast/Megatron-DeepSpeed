@@ -14,6 +14,7 @@
 # limitations under the License.
 
 """BERT Style dataset."""
+import time
 
 import numpy as np
 import torch
@@ -24,13 +25,139 @@ from megatron import (
     mpu,
     print_rank_0
 )
+from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.dataset_utils import (
     get_samples_mapping,
     get_a_and_b_segments,
+    get_split_by_range_,
     truncate_segments,
     create_tokens_and_tokentypes,
-    create_masked_lm_predictions
+    create_masked_lm_predictions,
+    get_datasets_weights_and_num_samples
 )
+from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
+
+def build_dataset_group(dataset_group_name, paths, weights, splits, data_impl,
+                        train_valid_test_num_samples, max_seq_length, 
+                        masked_lm_prob, short_seq_prob, binary_head, seed, 
+                        skip_warmup, train_valid_test):
+    '''
+    Build a single dataset group corresponding to Option 2 of data loading see arguments.py
+    a dataset group is passed on the following form
+    GIVEN_NAME WEIGHT1 START:END PATH1, WEIGHT2 START:END PATH2, WEIGHT2 START:END PATH2
+    or alternatively
+    GIVEN_NAME PATH1    # for a single dataset to be used fully
+    '''
+
+    assert train_valid_test in ["train","valid","test"]
+
+    # Single dataset.
+    if len(paths) == 1:
+        dataset =  _build_single_datasets(paths[0],
+                                          splits[0],
+                                          data_impl,
+                                          train_valid_test_num_samples,
+                                          max_seq_length, masked_lm_prob, 
+                                          short_seq_prob, binary_head, seed, 
+                                          skip_warmup, dataset_group_name, 
+                                          train_valid_test)
+        return dataset
+    # Blending dataset.
+    else:
+
+        data_prefix = []
+        # data_prefix is on the shape:
+        # ["WEIGHT1", "PATH1", "WEIGHT2", "PATH2", "WEIGHT3", "PATH3"]
+        for w,p in zip(weights, paths):
+            data_prefix += [w,p]
+
+        output = get_datasets_weights_and_num_samples(data_prefix,
+                                                    train_valid_test_num_samples)
+        prefixes, weights, datasets_train_valid_test_num_samples = output
+
+        # Build individual datasets.
+        datasets = []
+        for i in range(len(prefixes)):
+            ds = _build_single_datasets(prefixes[i],
+                                        splits[i],
+                                        data_impl,
+                                        datasets_train_valid_test_num_samples[i],
+                                        max_seq_length,
+                                        masked_lm_prob,
+                                        short_seq_prob,
+                                        binary_head,
+                                        seed, skip_warmup,
+                                        dataset_group_name, train_valid_test)
+
+            datasets.append(ds)
+        all_datasets = BlendableDataset(datasets, weights)
+
+        return all_datasets
+
+
+def _build_single_datasets(data_prefix, range_string, data_impl, train_valid_test_num_samples,
+                            max_seq_length, masked_lm_prob, short_seq_prob, 
+                            binary_head, seed, skip_warmup, dataset_group_name, 
+                            train_valid_test):
+    """Build a single dataset"""
+
+    assert train_valid_test in ["train","valid","test"]
+    index = ["train","valid","test"].index(train_valid_test)
+
+    # Indexed dataset.
+    indexed_dataset = get_indexed_dataset_(data_prefix,
+                                           data_impl,
+                                           skip_warmup)
+
+    total_num_of_documents = indexed_dataset.sizes.shape[0]
+    # this corresponds to option2 for data loading on the form
+    # WEIGHT1 START:END PATH1, WEIGHT2 START:END PATH2, WEIGHT3 START:END PATH3
+    # splits here is an array of size 2  [start_index, end_index]
+    splits = get_split_by_range_(range_string=range_string, size=total_num_of_documents)
+
+    # Print stats about the splits.
+    print_rank_0(' > dataset split:')
+
+    print_rank_0('    {}:'.format(dataset_group_name))
+    print_rank_0('     document indices in [{}, {}) total of {} '
+                     'documents'.format(splits[0], splits[1],
+                                        splits[1] - splits[0]))
+
+    def build_dataset(name):
+        dataset = None
+        if splits[1] > splits[0]:
+            documents = np.arange(start=splits[0], stop=splits[1],
+                                  step=1, dtype=np.int32)
+            dataset = BertDataset(name=name,
+                                  indexed_dataset=indexed_dataset,
+                                  data_prefix=data_prefix,
+                                  num_epochs=None,
+                                  max_num_samples=train_valid_test_num_samples[index],
+                                  masked_lm_prob=masked_lm_prob,
+                                  max_seq_length=max_seq_length, 
+                                  short_seq_prob=short_seq_prob,
+                                  binary_head=binary_head,
+                                  seed=seed)
+        return dataset
+
+    dataset = build_dataset(dataset_group_name)
+
+    return dataset
+
+
+def get_indexed_dataset_(path, data_impl, skip_warmup):
+    """Build indexed dataset."""
+    print_rank_0(' > building dataset index ...')
+    start_time = time.time()
+    indexed_dataset = make_indexed_dataset(path,
+                                           data_impl,
+                                           skip_warmup)
+    print_rank_0(' > finished creating indexed dataset in {:4f} '
+                 'seconds'.format(time.time() - start_time))
+    print_rank_0('    number of documents: {}'.format(
+        indexed_dataset.sizes.shape[0]))
+
+    return indexed_dataset
 
 
 class BertDataset(torch.utils.data.Dataset):
