@@ -129,9 +129,9 @@ def _build_single_datasets(data_prefix, range_string, data_impl, train_valid_tes
             documents = np.arange(start=splits[0], stop=splits[1],
                                   step=1, dtype=np.int32)
             dataset = BertDataset(name=name,
-                                  indexed_dataset=indexed_dataset,
                                   data_prefix=data_prefix,
-                                  num_epochs=None,
+                                  documents=documents,
+                                  indexed_dataset=indexed_dataset,
                                   max_num_samples=train_valid_test_num_samples[index],
                                   masked_lm_prob=masked_lm_prob,
                                   max_seq_length=max_seq_length, 
@@ -162,8 +162,8 @@ def get_indexed_dataset_(path, data_impl, skip_warmup):
 
 class BertDataset(torch.utils.data.Dataset):
 
-    def __init__(self, name, indexed_dataset, data_prefix,
-                 num_epochs, max_num_samples, masked_lm_prob,
+    def __init__(self, name, data_prefix, documents, indexed_dataset, 
+                 max_num_samples, masked_lm_prob,
                  max_seq_length, short_seq_prob, seed, binary_head):
 
         # Params to store.
@@ -173,6 +173,14 @@ class BertDataset(torch.utils.data.Dataset):
         self.max_seq_length = max_seq_length
         self.binary_head = binary_head
 
+        # Checks
+        assert np.min(documents) >= 0
+        assert np.max(documents) < indexed_dataset.sizes.shape[0]
+
+        # Number of tokens in each epoch and number of required epochs.
+        tokens_per_epoch = _num_tokens(documents, self.indexed_dataset.sizes)
+        num_epochs = _num_epochs(tokens_per_epoch, max_seq_length, max_num_samples)
+
         # Dataset.
         self.indexed_dataset = indexed_dataset
 
@@ -180,7 +188,7 @@ class BertDataset(torch.utils.data.Dataset):
         self.samples_mapping = get_samples_mapping(self.indexed_dataset,
                                                    data_prefix,
                                                    num_epochs,
-                                                   max_num_samples,
+                                                   None,
                                                    self.max_seq_length - 3, # account for added tokens
                                                    short_seq_prob,
                                                    self.seed,
@@ -320,3 +328,22 @@ def pad_and_convert_to_numpy(tokens, tokentypes, masked_positions,
     loss_mask_np = np.array(loss_mask, dtype=np.int64)
 
     return tokens_np, tokentypes_np, labels_np, padding_mask_np, loss_mask_np
+
+def _num_tokens(documents, sizes):
+    """Total number of tokens in the dataset."""
+    return np.sum(sizes[documents])
+
+
+def _num_epochs(tokens_per_epoch, seq_length, num_samples):
+    """Based on number of samples and sequence lenght, calculate how many
+    epochs will be needed."""
+    num_epochs = 0
+    total_tokens = 0
+    while True:
+        num_epochs += 1
+        total_tokens += tokens_per_epoch
+        # -1 is because we need to retrieve seq_length + 1 token each time
+        # but the last token will overlap with the first token of the next
+        # sample except for the last sample.
+        if ((total_tokens - 1) // seq_length) >= num_samples:
+            return num_epochs
