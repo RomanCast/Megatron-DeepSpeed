@@ -14,7 +14,6 @@
 # limitations under the License.
 
 """BERT Style dataset."""
-import time
 
 import numpy as np
 import torch
@@ -25,145 +24,23 @@ from megatron import (
     mpu,
     print_rank_0
 )
-from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.dataset_utils import (
     get_samples_mapping,
     get_a_and_b_segments,
-    get_split_by_range_,
     truncate_segments,
     create_tokens_and_tokentypes,
     create_masked_lm_predictions,
+    get_indexed_dataset_,
+    get_split_by_range_,
     get_datasets_weights_and_num_samples
 )
-from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
-
-def build_dataset_group(dataset_group_name, paths, weights, splits, data_impl,
-                        train_valid_test_num_samples, max_seq_length, 
-                        masked_lm_prob, short_seq_prob, binary_head, seed, 
-                        skip_warmup, train_valid_test):
-    '''
-    Build a single dataset group corresponding to Option 2 of data loading see arguments.py
-    a dataset group is passed on the following form
-    GIVEN_NAME WEIGHT1 START:END PATH1, WEIGHT2 START:END PATH2, WEIGHT2 START:END PATH2
-    or alternatively
-    GIVEN_NAME PATH1    # for a single dataset to be used fully
-    '''
-
-    assert train_valid_test in ["train","valid","test"]
-
-    # Single dataset.
-    if len(paths) == 1:
-        dataset =  _build_single_datasets(paths[0],
-                                          splits[0],
-                                          data_impl,
-                                          train_valid_test_num_samples,
-                                          max_seq_length, masked_lm_prob, 
-                                          short_seq_prob, binary_head, seed, 
-                                          skip_warmup, dataset_group_name, 
-                                          train_valid_test)
-        return dataset
-    # Blending dataset.
-    else:
-
-        data_prefix = []
-        # data_prefix is on the shape:
-        # ["WEIGHT1", "PATH1", "WEIGHT2", "PATH2", "WEIGHT3", "PATH3"]
-        for w,p in zip(weights, paths):
-            data_prefix += [w,p]
-
-        output = get_datasets_weights_and_num_samples(data_prefix,
-                                                    train_valid_test_num_samples)
-        prefixes, weights, datasets_train_valid_test_num_samples = output
-
-        # Build individual datasets.
-        datasets = []
-        for i in range(len(prefixes)):
-            ds = _build_single_datasets(prefixes[i],
-                                        splits[i],
-                                        data_impl,
-                                        datasets_train_valid_test_num_samples[i],
-                                        max_seq_length,
-                                        masked_lm_prob,
-                                        short_seq_prob,
-                                        binary_head,
-                                        seed, skip_warmup,
-                                        dataset_group_name, train_valid_test)
-
-            datasets.append(ds)
-        all_datasets = BlendableDataset(datasets, weights)
-
-        return all_datasets
-
-
-def _build_single_datasets(data_prefix, range_string, data_impl, train_valid_test_num_samples,
-                            max_seq_length, masked_lm_prob, short_seq_prob, 
-                            binary_head, seed, skip_warmup, dataset_group_name, 
-                            train_valid_test):
-    """Build a single dataset"""
-
-    assert train_valid_test in ["train","valid","test"]
-    index = ["train","valid","test"].index(train_valid_test)
-
-    # Indexed dataset.
-    indexed_dataset = get_indexed_dataset_(data_prefix,
-                                           data_impl,
-                                           skip_warmup)
-
-    total_num_of_documents = indexed_dataset.sizes.shape[0]
-    # this corresponds to option2 for data loading on the form
-    # WEIGHT1 START:END PATH1, WEIGHT2 START:END PATH2, WEIGHT3 START:END PATH3
-    # splits here is an array of size 2  [start_index, end_index]
-    splits = get_split_by_range_(range_string=range_string, size=total_num_of_documents)
-
-    # Print stats about the splits.
-    print_rank_0(' > dataset split:')
-
-    print_rank_0('    {}:'.format(dataset_group_name))
-    print_rank_0('     document indices in [{}, {}) total of {} '
-                     'documents'.format(splits[0], splits[1],
-                                        splits[1] - splits[0]))
-
-    def build_dataset(name):
-        dataset = None
-        if splits[1] > splits[0]:
-            documents = np.arange(start=splits[0], stop=splits[1],
-                                  step=1, dtype=np.int32)
-            dataset = BertDataset(name=name,
-                                  data_prefix=data_prefix,
-                                  documents=documents,
-                                  indexed_dataset=indexed_dataset,
-                                  max_num_samples=train_valid_test_num_samples[index],
-                                  masked_lm_prob=masked_lm_prob,
-                                  max_seq_length=max_seq_length, 
-                                  short_seq_prob=short_seq_prob,
-                                  binary_head=binary_head,
-                                  seed=seed)
-        return dataset
-
-    dataset = build_dataset(dataset_group_name)
-
-    return dataset
-
-
-def get_indexed_dataset_(path, data_impl, skip_warmup):
-    """Build indexed dataset."""
-    print_rank_0(' > building dataset index ...')
-    start_time = time.time()
-    indexed_dataset = make_indexed_dataset(path,
-                                           data_impl,
-                                           skip_warmup)
-    print_rank_0(' > finished creating indexed dataset in {:4f} '
-                 'seconds'.format(time.time() - start_time))
-    print_rank_0('    number of documents: {}'.format(
-        indexed_dataset.sizes.shape[0]))
-
-    return indexed_dataset
+from megatron.data.blendable_dataset import BlendableDataset
 
 
 class BertDataset(torch.utils.data.Dataset):
 
-    def __init__(self, name, data_prefix, documents, indexed_dataset, 
-                 max_num_samples, masked_lm_prob,
+    def __init__(self, name, indexed_dataset, data_prefix,
+                 num_epochs, max_num_samples, masked_lm_prob,
                  max_seq_length, short_seq_prob, seed, binary_head):
 
         # Params to store.
@@ -173,14 +50,6 @@ class BertDataset(torch.utils.data.Dataset):
         self.max_seq_length = max_seq_length
         self.binary_head = binary_head
 
-        # Checks
-        assert np.min(documents) >= 0
-        assert np.max(documents) < indexed_dataset.sizes.shape[0]
-
-        # Number of tokens in each epoch and number of required epochs.
-        tokens_per_epoch = _num_tokens(documents, self.indexed_dataset.sizes)
-        num_epochs = _num_epochs(tokens_per_epoch, max_seq_length, max_num_samples)
-
         # Dataset.
         self.indexed_dataset = indexed_dataset
 
@@ -188,7 +57,7 @@ class BertDataset(torch.utils.data.Dataset):
         self.samples_mapping = get_samples_mapping(self.indexed_dataset,
                                                    data_prefix,
                                                    num_epochs,
-                                                   None,
+                                                   max_num_samples,
                                                    self.max_seq_length - 3, # account for added tokens
                                                    short_seq_prob,
                                                    self.seed,
@@ -329,21 +198,127 @@ def pad_and_convert_to_numpy(tokens, tokentypes, masked_positions,
 
     return tokens_np, tokentypes_np, labels_np, padding_mask_np, loss_mask_np
 
-def _num_tokens(documents, sizes):
-    """Total number of tokens in the dataset."""
-    return np.sum(sizes[documents])
+def build_dataset_group(dataset_group_name, paths, weights, splits, data_impl,
+                        train_valid_test_num_samples, max_seq_length, 
+                        masked_lm_prob, short_seq_prob,
+                        seed, skip_warmup, binary_head, train_valid_test):
+    assert train_valid_test in ["train","valid","test"]
+
+    # Single dataset.
+    if len(paths) == 1:
+        dataset =  _build_single_datasets(paths[0],
+                                        data_impl,
+                                        splits[0],
+                                        train_valid_test_num_samples,
+                                        max_seq_length, masked_lm_prob,
+                                        short_seq_prob,
+                                        seed, skip_warmup, binary_head,
+                                        dataset_group_name, train_valid_test)
+        return dataset
+    # Blending dataset.
+    else:
+
+        data_prefix = []
+        # data_prefix is on the shape:
+        # ["WEIGHT1", "PATH1", "WEIGHT2", "PATH2", "WEIGHT3", "PATH3"]
+        for w,p in zip(weights, paths):
+            data_prefix += [w,p]
+
+        output = get_datasets_weights_and_num_samples(data_prefix,
+                                                    train_valid_test_num_samples)
+        prefixes, weights, datasets_train_valid_test_num_samples = output
+
+        # Build individual datasets.
+        datasets = []
+        for i in range(len(prefixes)):
+            ds = _build_single_datasets(prefixes[i],
+                                        data_impl,
+                                        splits[i],
+                                        datasets_train_valid_test_num_samples[i],
+                                        max_seq_length, masked_lm_prob,
+                                        short_seq_prob,
+                                        seed, skip_warmup, binary_head,
+                                        dataset_group_name, train_valid_test)
+
+            datasets.append(ds)
+        all_datasets = BlendableDataset(datasets, weights)
+
+        return all_datasets
 
 
-def _num_epochs(tokens_per_epoch, seq_length, num_samples):
-    """Based on number of samples and sequence lenght, calculate how many
-    epochs will be needed."""
-    num_epochs = 0
-    total_tokens = 0
-    while True:
-        num_epochs += 1
-        total_tokens += tokens_per_epoch
-        # -1 is because we need to retrieve seq_length + 1 token each time
-        # but the last token will overlap with the first token of the next
-        # sample except for the last sample.
-        if ((total_tokens - 1) // seq_length) >= num_samples:
-            return num_epochs
+def _build_single_datasets(data_prefix, data_impl, splits_string,
+                           train_valid_test_num_samples,
+                           max_seq_length,
+                           masked_lm_prob, short_seq_prob, seed,
+                           skip_warmup, binary_head, dataset_group_name, 
+                           train_valid_test):
+    assert train_valid_test in ["train","valid","test"]
+    index = ["train","valid","test"].index(train_valid_test)
+
+    # Indexed dataset.
+    indexed_dataset = get_indexed_dataset_(data_prefix,
+                                           data_impl,
+                                           skip_warmup)
+
+
+    # Get start and end indices of train/valid/train into doc-idx
+    # Note that doc-idx is desinged to be num-docs + 1 so we can
+    # easily iterate over it.
+    total_num_of_documents = indexed_dataset.doc_idx.shape[0] - 1
+    splits = get_split_by_range_(splits_string, total_num_of_documents)
+
+    # Print stats about the splits.
+    print_rank_0(' > dataset split:')
+
+    def print_split_stats(name):
+        print_rank_0('    {}:'.format(name))
+        print_rank_0('     document indices in [{}, {}) total of {} '
+                     'documents'.format(splits[0], splits[1],
+                                        splits[1] - splits[0]))
+        start_index = indexed_dataset.doc_idx[splits[0]]
+        end_index = indexed_dataset.doc_idx[splits[1]]
+        print_rank_0('     sentence indices in [{}, {}) total of {} '
+                     'sentences'.format(start_index, end_index,
+                                        end_index - start_index))
+    print_split_stats(dataset_group_name)
+
+    def build_dataset(name):
+        dataset = None
+        if splits[1] > splits[0]:
+            # Get the pointer to the original doc-idx so we can set it later.
+            doc_idx_ptr = indexed_dataset.get_doc_idx()
+            # Slice the doc-idx
+            start_index = splits[0]
+            # Add +1 so we can index into the dataset to get the upper bound.
+            end_index = splits[1] + 1
+            # New doc_idx view.
+            indexed_dataset.set_doc_idx(doc_idx_ptr[start_index:end_index])
+            # Build the dataset accordingly.
+            kwargs = dict(
+                name=name,
+                data_prefix=data_prefix,
+                num_epochs=None,
+                max_num_samples=train_valid_test_num_samples[index],
+                max_seq_length=max_seq_length,
+                seed=seed,
+            )
+
+            dataset = BertDataset(
+                indexed_dataset=indexed_dataset,
+                masked_lm_prob=masked_lm_prob,
+                short_seq_prob=short_seq_prob,
+                binary_head=binary_head,
+                **kwargs
+            )
+
+            # Set the original pointer so dataset remains the main dataset.
+            indexed_dataset.set_doc_idx(doc_idx_ptr)
+            # Checks.
+            assert indexed_dataset.doc_idx[0] == 0
+            assert indexed_dataset.doc_idx.shape[0] == \
+                (total_num_of_documents + 1)
+        return dataset
+
+    dataset = build_dataset(dataset_group_name)
+
+    return dataset
