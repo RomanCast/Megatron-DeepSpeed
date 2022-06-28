@@ -17,6 +17,7 @@
 
 from abc import ABC
 from abc import abstractmethod
+import os
 
 from .bert_tokenization import FullTokenizer as FullBertTokenizer
 from .gpt2_tokenization import GPT2Tokenizer
@@ -388,10 +389,16 @@ class _AutoTokenizerFromTokenizers(AbstractTokenizer):
 class _BertAutoTokenizerFromTokenizers(AbstractTokenizer):
 
     def __init__(self, model_file):
-        model_file = model_file
+        self.model_file = model_file
         name = ".".join(model_file.split('.')[:-1])
         super().__init__(name)
-        self.tokenizer = tokenizers.Tokenizer.from_file(model_file)
+        if model_file.endswith(".json"):
+            self.tokenizer = tokenizers.Tokenizer.from_file(model_file)
+        elif os.path.isdir(model_file):
+            self.tokenizer = AutoTokenizer.from_pretrained(model_file)
+        else:
+            raise ValueError(f"Unable to determine the type of tokenizer '{model_file}' refers to.")
+            
         # These tokens are not originally included in the BPE tokenizer, we add them manually.
         self.tokenizer.add_special_tokens(
             ['[CLS]', '[SEP]', '[PAD]', '[MASK]']
