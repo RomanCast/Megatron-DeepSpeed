@@ -16,15 +16,18 @@
 """Processing data for pretraining."""
 
 import argparse
+import subprocess
 import json
 import multiprocessing
 import os
 import sys
+import logging
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__),
                                              os.path.pardir)))
 from megatron.data.indexed_dataset import best_fitting_dtype
 import time
+from tqdm import tqdm
 
 import torch
 try:
@@ -35,7 +38,10 @@ except ImportError:
 
 from megatron.tokenizer import build_tokenizer
 from megatron.data import indexed_dataset
+from datasets.utils.logging import set_verbosity_info
 
+set_verbosity_info()
+logger = logging.getLogger(__name__)
 
 # https://stackoverflow.com/questions/33139531/preserve-empty-lines-with-nltks-punkt-tokenizer
 class CustomLanguageVars(nltk.tokenize.punkt.PunktLanguageVars):
@@ -83,10 +89,13 @@ class Encoder(object):
         for key in self.args.json_keys:
             text = data[key]
             doc_ids = []
-            for sentence in Encoder.splitter.tokenize(text):
-                sentence_ids = Encoder.tokenizer.tokenize(sentence)
-                if len(sentence_ids) > 0:
-                    doc_ids.append(sentence_ids)
+            sentences = Encoder.splitter.tokenize(text)
+            doc_ids = Encoder.tokenizer.tokenize(sentences)
+            doc_ids = [sentence_ids for sentence_ids in doc_ids if len(sentence_ids) > 0]
+            # for sentence in Encoder.splitter.tokenize(text):
+            #     sentence_ids = Encoder.tokenizer.tokenize(sentence)
+            #     if len(sentence_ids) > 0:
+            #         doc_ids.append(sentence_ids)
             if len(doc_ids) > 0 and self.args.append_eod:
                 doc_ids[-1].append(Encoder.tokenizer.eod)
             ids[key] = doc_ids
@@ -149,10 +158,19 @@ def get_args():
     return args
 
 def main():
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
+    )
+
     args = get_args()
     startup_start = time.time()
 
-    print("Opening", args.input)
+    # We count lines to have a nice progress bar. This should be the fastest way, if it's too slow we can remove it
+    n_lines = int(subprocess.check_output(["wc", "-l", args.input]).split()[0])
+
+    logger.info(f"Opening {args.input}")
     fin = open(args.input, 'r', encoding='utf-8')
 
     if nltk_available and args.split_sentences:
@@ -161,12 +179,16 @@ def main():
     encoder = Encoder(args)
     tokenizer = build_tokenizer(args)
     pool = multiprocessing.Pool(args.workers, initializer=encoder.initializer)
-    encoded_docs = pool.imap(encoder.encode, fin, 25)
+
+    logger.info("Starting tokenization")
+    encoded_docs = list(tqdm(pool.imap(encoder.encode, fin, 1000), total=n_lines))
     #encoded_docs = map(encoder.encode, fin)
 
     level = "document"
     if args.split_sentences:
         level = "sentence"
+
+    logger.info("Finished tokenization. Constructing indices...")
 
     print(f"Vocab size: {tokenizer.vocab_size}")
     print(f"Output prefix: {args.output_prefix}")
@@ -185,7 +207,7 @@ def main():
     startup_end = time.time()
     proc_start = time.time()
     total_bytes_processed = 0
-    print("Time to startup:", startup_end - startup_start)
+    logger.info(f"Time to startup: {startup_end - startup_start}")
 
     for i, (doc, bytes_processed) in enumerate(encoded_docs, start=1):
         total_bytes_processed += bytes_processed
@@ -205,6 +227,8 @@ def main():
 
     for key in args.json_keys:
         builders[key].finalize(output_idx_files[key])
+
+    logger.info("Finished writing to disk.")
 
 if __name__ == '__main__':
     main()

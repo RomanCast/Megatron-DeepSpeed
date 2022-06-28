@@ -416,6 +416,8 @@ class _BertAutoTokenizerFromTokenizers(AbstractTokenizer):
         return self.decoder
 
     def tokenize(self, text):
+        if isinstance(text, list):
+            return self.tokenizer.batch_encode(text).ids
         return self.tokenizer.encode(text).ids
 
     def decode(self, ids):
