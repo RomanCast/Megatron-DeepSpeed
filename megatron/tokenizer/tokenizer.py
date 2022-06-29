@@ -34,7 +34,8 @@ def build_tokenizer(args):
     assert args.vocab_file is not None or args.tokenizer_type in [
         "PretrainedFromHF", 
         "PretrainedFromHFTokenizers",
-        "BertPretrainedFromHFTokenizers"
+        "BertPretrainedFromHFTokenizers",
+        "BertPretrainedFromHF"
     ]
     if args.tokenizer_type == 'BertWordPieceLowerCase':
         tokenizer = _BertWordPieceTokenizer(vocab_file=args.vocab_file,
@@ -68,6 +69,13 @@ def build_tokenizer(args):
             flush=True,
         )
         tokenizer = _BertAutoTokenizerFromTokenizers(args.tokenizer_name_or_path)
+    elif args.tokenizer_type == "BertPretrainedFromHF":
+        assert args.tokenizer_name_or_path is not None
+        print(
+            " vocab file is un-used. loading tokenizer from pre-trained model",
+            flush=True,
+        )
+        tokenizer = _BertAutoTokenizerFromHF(args.tokenizer_name_or_path)
     else:
         raise NotImplementedError('{} tokenizer is not '
                                   'implemented.'.format(args.tokenizer_type))
@@ -392,17 +400,12 @@ class _BertAutoTokenizerFromTokenizers(AbstractTokenizer):
         self.model_file = model_file
         name = ".".join(model_file.split('.')[:-1])
         super().__init__(name)
-        if model_file.endswith(".json"):
-            self.tokenizer = tokenizers.Tokenizer.from_file(model_file)
-        elif os.path.isdir(model_file):
-            self.tokenizer = AutoTokenizer.from_pretrained(model_file)
-        else:
-            raise ValueError(f"Unable to determine the type of tokenizer '{model_file}' refers to.")
-            
+        self.tokenizer = tokenizers.Tokenizer.from_file(model_file)
         # These tokens are not originally included in the BPE tokenizer, we add them manually.
         self.tokenizer.add_special_tokens(
             ['[CLS]', '[SEP]', '[PAD]', '[MASK]']
         )
+            
         self.encoder = self.tokenizer.get_vocab()
         self.decoder = {v: k for k, v in self.encoder.items()}
         self.cls_id = self.encoder['[CLS]']
@@ -423,9 +426,61 @@ class _BertAutoTokenizerFromTokenizers(AbstractTokenizer):
         return self.decoder
 
     def tokenize(self, text):
-        if isinstance(text, list):
-            return self.tokenizer.batch_encode(text).ids
         return self.tokenizer.encode(text).ids
+
+    def decode(self, ids):
+        return self.tokenizer.decode(ids)
+
+    @property
+    def cls(self):
+        return self.cls_id
+
+    @property
+    def sep(self):
+        return self.sep_id
+
+    @property
+    def pad(self):
+        return self.pad_id
+
+    @property
+    def mask(self):
+        return self.mask_id
+
+
+class _BertAutoTokenizerFromHF(AbstractTokenizer):
+    """Instantiate from Transformers rather than Tokenizers."""
+    def __init__(self, model_file):
+        self.model_file = model_file
+        name = ".".join(model_file.split('.')[:-1])
+        super().__init__(name)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_file)
+        self.tokenizer.add_special_tokens(
+            {"cls_token": '[CLS]', "sep_token": '[SEP]', "pad_token": '[PAD]', "mask_token": '[MASK]'}
+        )
+   
+        self.encoder = self.tokenizer.get_vocab()
+        self.decoder = {v: k for k, v in self.encoder.items()}
+        self.cls_id = self.encoder['[CLS]']
+        self.sep_id = self.encoder['[SEP]']
+        self.pad_id = self.encoder['[PAD]']
+        self.mask_id = self.encoder['[MASK]']
+
+    @property
+    def vocab_size(self):
+        return len(self.encoder)
+
+    @property
+    def vocab(self):
+        return self.encoder
+
+    @property
+    def inv_vocab(self):
+        return self.decoder
+
+    def tokenize(self, text):
+        return self.tokenizer.encode(text)
 
     def decode(self, ids):
         return self.tokenizer.decode(ids)

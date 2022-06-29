@@ -89,13 +89,13 @@ class Encoder(object):
         for key in self.args.json_keys:
             text = data[key]
             doc_ids = []
-            sentences = Encoder.splitter.tokenize(text)
-            doc_ids = Encoder.tokenizer.tokenize(sentences)
-            doc_ids = [sentence_ids for sentence_ids in doc_ids if len(sentence_ids) > 0]
-            # for sentence in Encoder.splitter.tokenize(text):
-            #     sentence_ids = Encoder.tokenizer.tokenize(sentence)
-            #     if len(sentence_ids) > 0:
-            #         doc_ids.append(sentence_ids)
+            # sentences = Encoder.splitter.tokenize(text)
+            # doc_ids = Encoder.tokenizer.tokenize(sentences)
+            # doc_ids = [sentence_ids for sentence_ids in doc_ids if len(sentence_ids) > 0]
+            for sentence in Encoder.splitter.tokenize(text):
+                sentence_ids = Encoder.tokenizer.tokenize(sentence)
+                if len(sentence_ids) > 0:
+                    doc_ids.append(sentence_ids)
             if len(doc_ids) > 0 and self.args.append_eod:
                 doc_ids[-1].append(Encoder.tokenizer.eod)
             ids[key] = doc_ids
@@ -120,7 +120,8 @@ def get_args():
                        choices=['BertWordPieceLowerCase','BertWordPieceCase',
                                 'GPT2BPETokenizer', 'PretrainedFromHF', 
                                 'PretrainedFromHFTokenizers', 
-                                'BertPretrainedFromHFTokenizers'],
+                                'BertPretrainedFromHFTokenizers',
+                                'BertPretrainedFromHF'],
                        help='What type of tokenizer to use.')
     group.add_argument('--vocab-file', type=str, default=None,
                        help='Path to the vocab file')
